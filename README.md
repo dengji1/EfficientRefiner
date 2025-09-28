@@ -49,10 +49,5 @@ Go to the root directory.
 
 For macro placement refinement, the following is an example command to run EfficientRefiner on the "adaptec1" dataset for 50k iterations, using ```input_pl/adaptec1.pl``` as the input placement file.
 ```
-python main.py --benchmark="adaptec1" --benchmark_dir="benchmark/ispd2005_macro" --iter=50000 --pl_dir="input_pl"
-```
-
-For mixed-size placement refinement, the following is an example command to run EfficientRefiner on the "adaptec2" dataset for 5k iterations, using ```input_pl/adaptec2.pl``` as the input placement file.
-```
-python main.py --benchmark="adaptec2" --mix --benchmark_dir="benchmark/ispd2005" --iter=5000 --pl_dir="input_pl"
+python main.py --benchmark="adaptec1" --benchmark_dir="benchmark/ispd2005" --iter=5000 --pl_dir="input_pl"
 ```
