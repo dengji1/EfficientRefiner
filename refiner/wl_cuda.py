@@ -4,8 +4,6 @@ import numba
 from numba import cuda
 import math
 
-args = None
-
 @cuda.jit
 def cal_e_plus_minus(e_plus, e_minus, pin_pos, pin2net):
     idx_start = cuda.grid(1)
@@ -176,11 +174,8 @@ def get_wl(chip : RefineDB, pos, ref_args):
     args = ref_args
     
     pin_offset = chip.pin_offset / chip.chip_size.reshape(-1, 2)
-    if chip.port_cnt > 0:
-        port_offset = chip.port_pos / chip.chip_size.reshape(-1, 2)
-        pin_offset = np.concatenate([pin_offset, port_offset], axis=0)
-    pin2net = np.concatenate([chip.pin2net, chip.port2net])
-    pos_all = np.concatenate([pos, np.zeros((chip.port_cnt, 2))], axis=0)
+    pin2net = chip.pin2net
+    pos_all = pos
 
     wlx, dposx = get_wl_xy(pin2net, chip.pin2node, np.ascontiguousarray(pin_offset[:, 0]), np.ascontiguousarray(pos_all[:, 0]), chip.net_cnt, chip.node_cnt, args.gamma)
     wly, dposy = get_wl_xy(pin2net, chip.pin2node, np.ascontiguousarray(pin_offset[:, 1]), np.ascontiguousarray(pos_all[:, 1]), chip.net_cnt, chip.node_cnt, args.gamma)
@@ -190,11 +185,8 @@ def get_hpwl(chip : RefineDB, pos, ref_args):
     global args
     args = ref_args
     pin_offset = chip.pin_offset
-    if chip.port_cnt > 0:
-        port_offset = chip.port_pos
-        pin_offset = np.concatenate([pin_offset, port_offset], axis=0)
-    pin2net = np.concatenate([chip.pin2net, chip.port2net])
-    pos_all = np.concatenate([pos, np.zeros((chip.port_cnt, 2))], axis=0)
+    pin2net = chip.pin2net
+    pos_all = pos
     hpwlx = get_hpwl_xy(pin2net, chip.pin2node, np.ascontiguousarray(pin_offset[:, 0]), np.ascontiguousarray(pos_all[:, 0]), chip.net_cnt)
     hpwly = get_hpwl_xy(pin2net, chip.pin2node, np.ascontiguousarray(pin_offset[:, 1]), np.ascontiguousarray(pos_all[:, 1]), chip.net_cnt)
     return hpwlx + hpwly
