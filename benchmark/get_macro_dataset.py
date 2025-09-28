@@ -3,9 +3,9 @@ import pickle
 import argparse
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--input_dir', type=str, default='ispd2005')
-parser.add_argument('--output_dir', type=str, default='ispd2005_macro')
-parser.add_argument('--benchmark', type=str, default='adaptec1')
+parser.add_argument('--input_dir', type=str, default='iccad2015')
+parser.add_argument('--output_dir', type=str, default='iccad2015_8192macro')
+parser.add_argument('--benchmark', type=str, default='superblue3')
 args = parser.parse_args()
 
 class PlaceDB():
@@ -21,10 +21,18 @@ class PlaceDB():
         fopen = open(os.path.join(self.base_dir, self.benchmark+".nodes"), "r")
         
         node_range_list = {}
-        macro_list_dir = os.path.join(macro_list_dir, self.benchmark+".pkl")
+        macro_list_dir = os.path.join(macro_list_dir, self.benchmark+"_8192.pkl")
         if self.benchmark == "bigblue2" or self.benchmark == "bigblue4" or \
             self.benchmark.startswith('superblue'):
             node_range_list = pickle.load(open(macro_list_dir,'rb'))
+        if 'openroad' in self.base_dir:
+            macro_list_dir = os.path.join(self.base_dir, self.benchmark+".macros")
+            node_range_list = []
+            with open(macro_list_dir, 'r') as f:
+                for line in f:
+                    macro_name = line.strip()
+                    if macro_name:
+                        node_range_list.append(macro_name)
 
         node_info = {}
         for line in fopen.readlines():
@@ -33,11 +41,14 @@ class PlaceDB():
             line = line.strip().split()
             node_name = line[0]
             if node_range_list and node_name not in node_range_list:
+                if line[-1] == 'terminal_NI':
+                    x, y = int(line[1]), int(line[2])
+                    node_info[node_name] = {"x": x , "y": y, "fix": True}
                 continue
             if not node_range_list and line[-1] != 'terminal':
                 continue
             x, y = int(line[1]), int(line[2])
-            node_info[node_name] = {"x": x , "y": y}
+            node_info[node_name] = {"x": x , "y": y, "fix": False}
             
         fopen.close()
         return node_info
@@ -84,6 +95,7 @@ class PlaceDB():
             place_x, place_y = int(line[1]), int(line[2])
             self.node_info[node_name]["raw_x"] = place_x
             self.node_info[node_name]["raw_y"] = place_y
+            self.node_info[node_name]["orign"] = line[4]
             
         fopen.close()
 
@@ -129,7 +141,10 @@ def write_nodes(benchmark, placedb:PlaceDB, output_dir):
         f.write(f'NumTerminals : 		{len(placedb.node_info)}\n')
         for node in placedb.node_info:
             x, y = placedb.node_info[node]['x'], placedb.node_info[node]['y']
-            f.write(f'\t{node} {int(x)}\t{int(y)}\tterminal\n')
+            if not placedb.node_info[node]['fix']:
+                f.write(f'\t{node} {int(x)}\t{int(y)}\tterminal\n')
+            else:
+                f.write(f'\t{node} {int(x)}\t{int(y)}\tterminal_NI\n')
 
 def write_nets(benchmark, placedb:PlaceDB, output_dir):
     filew = os.path.join(output_dir, benchmark+'.nets')
@@ -154,7 +169,10 @@ def write_pl(benchmark, placedb:PlaceDB, output_dir):
         f.write('UCLA pl 1.0\n\n')
         for node in placedb.node_info:
             x, y = int(placedb.node_info[node]['raw_x']), int(placedb.node_info[node]['raw_y'])
-            f.write(f'{node}\t{x}\t{y}\t: N\n')
+            if placedb.node_info[node]['fix']:
+                f.write(f"{node}\t{x}\t{y}\t: {placedb.node_info[node]['orign']} /FIXED_NI\n")
+            else:
+                f.write(f"{node}\t{x}\t{y}\t: {placedb.node_info[node]['orign']}\n")
 
 if __name__ == '__main__':
     placedb = PlaceDB(args.benchmark, args.input_dir, 'macro_list')
