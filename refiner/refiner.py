@@ -3,21 +3,21 @@ import os
 import numpy as np
 import time
 from refiner.overlap_cuda import get_overlap, get_exact_overlap
-from refiner.overlap_mix_cuda import get_overlap as get_overlap_mix, get_exact_overlap as get_exact_overlap_mix, get_big_modules
+from refiner.overlap_prun_cuda import get_overlap as get_overlap_prun, get_exact_overlap as get_exact_overlap_prun, get_big_modules
 from refiner.wl_cuda import get_wl, get_hpwl
 from refiner.refiner_args import Args
 import torch
-from legalization.legalization import MacroLegalization
+from refiner.modify import *
 
 class Log:
     def __init__(self, args):
         file = os.path.join(args.output_dir, f'{args.benchmark}/{args.benchmark}.csv')
         self.fopen = open(file, 'w')
-        self.fopen.write('iter,hpwl,overlap\n')
+        self.fopen.write('iter,wl,overlap,ref\n')
         self.fopen.flush()
         
-    def write_line(self, iter, hpwl, overlap):
-        self.fopen.write(f'{iter},{hpwl:.2f},{overlap:.4f}\n')
+    def write_line(self, iter, wl, overlap,reg):
+        self.fopen.write(f'{iter},{wl:.2f},{overlap:.4f},{reg:.2f}\n')
         self.fopen.flush()
         
     def close(self):
@@ -38,6 +38,11 @@ def init_pos_ratio(chip:RefineDB):
     pos = np.minimum(pos, 1)
     return inv_sigmoid(pos)
 
+def get_pos_ratio(pos_init, chip:RefineDB):
+    pos = (pos_init) / (chip.chip_size.reshape(-1, 2) - chip.node_size)
+    pos = np.minimum(pos, 1)
+    return inv_sigmoid(pos)
+
 def get_pos_bound(chip:RefineDB):
     pos_min, pos_max = np.zeros([chip.node_cnt,2]), np.ones([chip.node_cnt,2])
     pos_min += chip.node_size / chip.chip_size.reshape(-1, 2) / 2
@@ -46,11 +51,11 @@ def get_pos_bound(chip:RefineDB):
 
 def refiner(chip: RefineDB, args):
     ref_args = Args(args)
-    if not args.mix:
-        legalizer = MacroLegalization(chip, args)
-        legal_placement = np.zeros((chip.node_cnt, 2), dtype=np.float32)
     
-    if args.mix:
+    if args.save_curve:
+        curve_log = Log(args)
+    
+    if args.pruning:
         bin_x = np.percentile(chip.node_size[:, 0], ref_args.percentile)
         bin_y = np.percentile(chip.node_size[:, 1], ref_args.percentile)
         bin_num = int(min(chip.chip_size[0] // bin_x, chip.chip_size[1] // bin_y))
@@ -62,25 +67,17 @@ def refiner(chip: RefineDB, args):
     pos_ratio = init_pos_ratio(chip)
     pos_ratio_tensor = torch.tensor(pos_ratio, requires_grad=True)
     optimizer = torch.optim.Adam([pos_ratio_tensor], lr=args.lr)
+    
     pos_min, pos_max = get_pos_bound(chip)
     pos_ratio = pos_ratio_tensor.detach().numpy()
     
     pos = pos_min + sigmoid(pos_ratio) * (pos_max - pos_min)
     placement = pos * chip.chip_size.reshape(-1, 2) - chip.node_size / 2
-    best_placement = None
-    best_hpwl = np.inf
     
-    hpwl = get_hpwl(chip, pos * chip.chip_size.reshape(-1, 2), ref_args)
-    if args.save_curve:
-        curve_log = Log(args)
-        if not args.mix:
-            overlap = get_exact_overlap(chip, pos, ref_args)
-        else:
-            overlap = get_exact_overlap_mix(chip, pos, ref_args)
-        curve_log.write_line(0, hpwl, overlap)
+    # hpwl = get_hpwl(chip, pos * chip.chip_size.reshape(-1, 2), ref_args)
+    # print('Initial HPWL =', hpwl)
             
     print('-----Refinement start-----')
-    print('Initial HPWL =', hpwl)
     start_time = time.time()
     
     for it in range(1, args.iter+1):
@@ -90,50 +87,43 @@ def refiner(chip: RefineDB, args):
         wl, d_pos_wl = get_wl(chip, pos, ref_args)
         d_ratio_wl = d_pos_wl * (pos_max - pos_min) * d_sigmoid(pos_ratio)
         
-        if not args.mix:
-            overlap, d_pos_overlap = get_overlap(chip, pos, ref_args)
+        if not args.pruning:
+            overlap, d_pos_overlap = get_overlap(chip, pos, ref_args, chip.fix_mask)
         else:
-            overlap, d_pos_overlap = get_overlap_mix(chip, pos, big_modules, bin_num, ref_args)
+            overlap, d_pos_overlap = get_overlap_prun(chip, pos, big_modules, bin_num, ref_args, chip.fix_mask)
         d_ratio_overlap = d_pos_overlap * (pos_max - pos_min) * d_sigmoid(pos_ratio)
-        
-        loss = wl + args.alpha * overlap
 
-        pos_ratio_tensor.grad = torch.tensor(d_ratio_wl + args.alpha * d_ratio_overlap)
+        reg, d_pos_reg = get_regulate(chip, pos, ref_args)
+        d_ratio_reg = d_pos_reg * (pos_max - pos_min) * d_sigmoid(pos_ratio)
+        
+        loss = wl + args.wo * overlap + args.wr * reg
+        tot_grad = torch.tensor(d_ratio_wl + args.wo * d_ratio_overlap + args.wr * d_ratio_reg)
+
+        fix_mask = np.zeros((chip.node_cnt, 2), dtype=np.bool_)
+        fix_mask[:, 0] = fix_mask[:, 1] = chip.fix_mask
+        fix_mask = torch.from_numpy(fix_mask)
+        tot_grad.masked_fill_(fix_mask, 0)
+        
+        pos_ratio_tensor.grad = tot_grad
         optimizer.step()
         
         if it % args.print_interval == 0:
-            print(f'iter={it}, loss={loss}, wl={wl}, overlap={overlap}')
+            print(f'iter={it}, loss={loss}, wl={wl}, overlap={overlap}, reg={reg}')
         
         if args.save_curve:
-            if not args.mix:
-                overlap = get_exact_overlap(chip, pos, ref_args)
-            else:
-                overlap = get_exact_overlap_mix(chip, pos, ref_args)
-            curve_log.write_line(it, hpwl, overlap)
-
-        if not args.mix and it > args.iter * 0.9 and it % args.legalization_interval == 0:
-            placement = pos * chip.chip_size.reshape(-1, 2) - chip.node_size / 2
-            placement, legal = legalizer.legalize(placement)
-            placement = placement.detach().cpu().numpy()
-            legal_placement[:, 0], legal_placement[:, 1] = placement[:chip.node_cnt], placement[chip.node_cnt:]
-            hpwl = get_hpwl(chip, legal_placement + chip.node_size / 2, ref_args)
-            print(f'HPWL after legalization = {hpwl}')
-            if hpwl < best_hpwl and legal:
-                best_hpwl = hpwl
-                best_placement = legal_placement.copy()
+            curve_log.write_line(it, wl, overlap, reg)
     
     print('-----Refinement end-----')
     print(f'Refinement time: {time.time()-start_time}s')
-    if not args.mix:
-        print(f'Best HPWL = {best_hpwl}')
     
     if args.save_curve:
         curve_log.close()
         
-    if args.mix:
-        best_placement = pos * chip.chip_size.reshape(-1, 2) - chip.node_size / 2
+    placement = pos * chip.chip_size.reshape(-1, 2) - chip.node_size / 2
+    placement[:, 0] = np.clip(placement[:, 0], 0, chip.chip_size[0])
+    placement[:, 1] = np.clip(placement[:, 1], 0, chip.chip_size[1])
         
     node_pos = {}
     for id, node in enumerate(chip.id2name_node):
-        node_pos[node] = {'x':best_placement[id, 0], 'y':best_placement[id, 1]}
+        node_pos[node] = {'x':placement[id, 0], 'y':placement[id, 1]}
     return node_pos
