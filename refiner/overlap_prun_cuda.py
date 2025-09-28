@@ -31,7 +31,7 @@ def cal_pair_ol_dpos(sx1, sx2, sy1, sy2, px1, px2, py1, py2):
 @cuda.jit
 def cal_overlap_dpos(overlap, dposx, dposy, num_bins,
                      bin_module_cnt, bin_modules, bin_x, bin_y, 
-                     pos_x, pos_y, size_x, size_y, big_modules):
+                     pos_x, pos_y, size_x, size_y, big_modules, fix):
     
     ix, iy = cuda.grid(2) 
     threads_per_grid_x, threads_per_grid_y = cuda.gridsize(2) 
@@ -40,6 +40,8 @@ def cal_overlap_dpos(overlap, dposx, dposy, num_bins,
     for m_idx1 in range(ix, node_cnt, threads_per_grid_x): 
         if big_modules[m_idx1]:
             for m_idx2 in range(iy, node_cnt, threads_per_grid_y):
+                if fix[m_idx1] == 1 and fix[m_idx2] == 1:
+                    continue
                 if (big_modules[m_idx2] and m_idx1 < m_idx2) or (not big_modules[m_idx2]):
                     ox, oy, dpx, dpy = cal_pair_ol_dpos(
                     size_x[m_idx1], size_x[m_idx2], size_y[m_idx1], size_y[m_idx2],
@@ -67,6 +69,8 @@ def cal_overlap_dpos(overlap, dposx, dposy, num_bins,
                 if nei_m_idx >= bin_module_cnt[bin_idx]:
                     continue
                 m_idx2 = bin_modules[bin_idx][nei_m_idx]
+                if fix[m_idx1] == 1 and fix[m_idx2] == 1:
+                    continue
                 if m_idx1 < m_idx2:
                     ox, oy, dpx, dpy = cal_pair_ol_dpos(
                     size_x[m_idx1], size_x[m_idx2], size_y[m_idx1], size_y[m_idx2],
@@ -122,7 +126,7 @@ def get_big_modules(chip : RefineDB, num_bins, args):
     
     return big_modules
     
-def get_overlap(chip : RefineDB, pos, big_modules, num_bins, args):
+def get_overlap(chip : RefineDB, pos, big_modules, num_bins, args, fix_mask):
     threads_per_block_2d = args.threads_per_block_2d
     threads_per_block = args.threads_per_block
     module_per_bin = args.max_module_per_bin
@@ -131,6 +135,8 @@ def get_overlap(chip : RefineDB, pos, big_modules, num_bins, args):
     size_x_gpu = cuda.to_device(np.ascontiguousarray(chip.node_size[:, 0] / chip.chip_size[0]))
     size_y_gpu = cuda.to_device(np.ascontiguousarray(chip.node_size[:, 1] / chip.chip_size[1]))
     big_modules_gpu = cuda.to_device(big_modules)
+    
+    fix_gpu = cuda.to_device(np.ascontiguousarray(fix_mask))
     
     bin_modules = cuda.device_array(shape=(num_bins * num_bins, module_per_bin), dtype=np.int32)
     bin_module_cnt = cuda.to_device(np.zeros((num_bins * num_bins), dtype=np.int32))
@@ -153,7 +159,7 @@ def get_overlap(chip : RefineDB, pos, big_modules, num_bins, args):
     cal_overlap_dpos[blocks_per_grid_2d, threads_per_block_2d](
        overlap_gpu, dposx_gpu, dposy_gpu, num_bins,
        bin_module_cnt, bin_modules, bin_x, bin_y, 
-       pos_x_gpu, pos_y_gpu, size_x_gpu, size_y_gpu, big_modules_gpu
+       pos_x_gpu, pos_y_gpu, size_x_gpu, size_y_gpu, big_modules_gpu, fix_gpu
     )
 
     overlap = overlap_gpu.copy_to_host()
