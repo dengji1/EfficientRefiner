@@ -1,0 +1,2 @@
+regularity[[:space:]]trend/pl/* filter=lfs diff=lfs merge=lfs -text
+regularity-trend/pl/* filter=lfs diff=lfs merge=lfs -text
