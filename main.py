@@ -69,7 +69,7 @@ def save_pl(benchmark, node_pos, pl_dir, placedb:PlaceDB):
     with open(pl_dir, 'w') as fwrite:
         fwrite.write('UCLA pl 1.0\n\n')
         for node_name in placedb.node_info_all:
-            orin = placedb.placedb.node_info_all[node_name]['orign']
+            orin = placedb.node_info_all[node_name]['orign']
             if node_name in node_pos:
                 if placedb.node_info[node_name]['fix']:
                     x = int(placedb.expert_pos[node_name]['x'] + placedb.offset_x)
