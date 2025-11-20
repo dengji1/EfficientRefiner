@@ -4,7 +4,7 @@ We provide instructions to reproduce the HPWL and Regularity trends shown in our
 
 ## Initial Layouts
 
-Initial placements for the superblue1–superblue3 circuits are generated using DreamPlace. The generated `.pl` files can be found in the `/pl` subdirectory.
+Initial placements for the superblue1–superblue4 circuits are generated using DreamPlace. The generated `.pl` files can be found in the `/pl` subdirectory.
 
 ## Refinement Command
 
